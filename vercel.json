@@ -1,17 +1,26 @@
 {
   "version": 2,
   "builds": [
-    { "src": "api/**/*.js", "use": "@vercel/node" }
+    {
+      "src": "api/**/*.js",
+      "use": "@vercel/node"
+    }
   ],
   "routes": [
-    { "src": "/api/(.*)", "dest": "/api/$1.js" },
-    { "src": "/(.*)", "dest": "/public/$1" },
-    { "src": "/", "dest": "/index.html" },
-    { "src": "/forum", "dest": "/forum.html" },
-    { "src": "/register-user", "dest": "/register-user.html" },
-    { "src": "/login-user", "dest": "/login-user.html" },
-    { "src": "/tahubakar", "dest": "/login-admin.html" },
-    { "src": "/tahuisi", "dest": "/register-admin.html" },
-    { "src": "/admin", "dest": "/dashboard.html" }
+    { "src": "^/api/(.*)$", "dest": "/api/$1.js" },
+
+    { "src": "^/$", "dest": "/index.html" },
+    { "src": "^/forum$", "dest": "/forum.html" },
+
+    { "src": "^/register-user$", "dest": "/register-user.html" },
+    { "src": "^/login-user$", "dest": "/login-user.html" },
+
+    { "src": "^/tahubakar$", "dest": "/login-admin.html" },
+    { "src": "^/tahuisi$", "dest": "/register-admin.html" },
+
+    { "src": "^/admin$", "dest": "/dashboard.html" },
+
+    
+    { "src": "/(.*)", "dest": "/$1" }
   ]
 }
