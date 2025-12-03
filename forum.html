@@ -1,0 +1,183 @@
+<!doctype html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Forum Curhat - Encrypted System</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://cdn.lordicon.com/ritcuqlt.js"></script>
+<style>
+  .fade-in{animation:fadeIn .35s ease both;}
+  @keyframes fadeIn{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+  .bubble{background:linear-gradient(180deg, rgba(255,255,255,0.85), rgba(255,255,255,0.75));}
+  .small-muted{font-size:0.8rem;color:#6b7280;}
+</style>
+</head>
+<body class="bg-gradient-to-br from-indigo-50 to-white min-h-screen text-gray-900">
+
+<!-- ======================== HEADER ======================== -->
+<div class="max-w-5xl mx-auto p-6">
+<header class="flex items-center justify-between">
+  <div class="flex items-center gap-4">
+    <lord-icon src="https://cdn.lordicon.com/zniqnylq.json" trigger="hover" style="width:52px;height:52px"></lord-icon>
+    <div>
+      <h1 class="text-2xl font-semibold">Forum Curhat</h1>
+      <p class="text-sm text-gray-500">Chat terenkripsi — auto hapus 1 jam — AI optional</p>
+    </div>
+  </div>
+  <div class="flex gap-3">
+    <a class="px-3 py-2 bg-indigo-600 text-white rounded" href="register-user.html">Register User</a>
+    <a class="px-3 py-2 border border-indigo-600 text-indigo-600 rounded" href="login-user.html">Login User</a>
+  </div>
+</header>
+
+<!-- ======================== BODY ======================== -->
+<main class="grid grid-cols-1 lg:grid-cols-3 gap-6 mt-6">
+
+<!-- ======================== CHAT PANEL ======================== -->
+<section class="lg:col-span-2 bg-white rounded-xl p-4 shadow">
+  <div class="flex justify-between mb-3">
+    <h2 class="text-lg font-medium">Curhatan</h2>
+    <span class="small-muted">Auto hapus 1 jam</span>
+  </div>
+
+  <div id="messages" class="space-y-3 max-h-[60vh] overflow-auto p-2"></div>
+
+  <textarea id="msg-input" rows="3" class="w-full p-3 border rounded mt-3" placeholder="Tulis curhatan..."></textarea>
+
+  <div class="flex justify-between mt-2">
+      <div>
+        <div class="small-muted">Mengirim sebagai</div>
+        <span id="display-name" class="font-medium text-indigo-600">Guest_.....</span>
+      </div>
+      <div class="flex gap-2">
+        <button id="btn-send" class="px-4 py-2 bg-indigo-600 text-white rounded">Kirim</button>
+        <button id="btn-logout" class="px-3 py-2 border rounded hidden">Logout</button>
+      </div>
+  </div>
+</section>
+
+<!-- ======================== ADMIN PANEL ======================== -->
+<aside class="bg-white rounded-xl p-4 shadow flex flex-col gap-4">
+
+  <div class="flex items-center gap-3">
+    <lord-icon src="https://cdn.lordicon.com/gqzfzudq.json" trigger="hover" style="width:42px;height:42px"></lord-icon>
+    <div>
+      <div id="profile-name" class="font-semibold">Belum login</div>
+      <div id="profile-role" class="small-muted">Role: Guest</div>
+    </div>
+  </div>
+
+  <div id="admin-controls" class="hidden flex-col gap-3">
+
+      <label class="small-muted">Mode Balas AI</label>
+      <div class="flex items-center gap-2">
+        <input id="ai-toggle" type="checkbox">
+        <span class="small-muted">Aktifkan AI Auto Reply</span>
+      </div>
+
+      <label class="small-muted">Nama Tampilan (Admin)</label>
+      <input id="admin-display" class="p-2 border rounded">
+
+      <button id="save-admin" class="px-3 py-2 bg-green-600 text-white rounded-md">Simpan</button>
+  </div>
+
+  <div id="top-info" class="small-muted">Tidak login</div>
+</aside>
+
+</main>
+</div>
+
+<script type="module">
+import {db,auth,ref,onValue,push,set,signOut} from "./firebase.js";
+
+// ================= KEY SYSTEM TANPA ENV ==================
+const PRIVATE_USER_KEY="U_KEY_2025";
+const PRIVATE_ADMIN_KEY="A_KEY_2025";
+
+async function sha256(txt){
+  return crypto.subtle.digest("SHA-256",new TextEncoder().encode(txt)).then(b=>b);
+}
+function toB64(buf){return btoa(String.fromCharCode(...new Uint8Array(buf)));}
+function fromB64(b64){return Uint8Array.from(atob(b64),c=>c.charCodeAt(0));}
+
+// derive key unik untuk setiap user
+async function userKey(uid){ return crypto.subtle.importKey("raw", await sha256(uid+PRIVATE_USER_KEY), "AES-GCM", false,["encrypt","decrypt"]); }
+async function adminKey(uid){return crypto.subtle.importKey("raw", await sha256(uid+PRIVATE_ADMIN_KEY),"AES-GCM",false,["encrypt","decrypt"]);}
+
+async function enc(key,txt){
+  const iv=crypto.getRandomValues(new Uint8Array(12));
+  const cipher=await crypto.subtle.encrypt({name:"AES-GCM",iv},key,new TextEncoder().encode(txt));
+  return {cipher:toB64(cipher),iv:toB64(iv)};
+}
+async function dec(key,data){
+  try{let p=await crypto.subtle.decrypt({name:"AES-GCM",iv:fromB64(data.iv)},key,fromB64(data.cipher));return new TextDecoder().decode(p);}
+  catch{return null}
+}
+// =========================================================
+
+const box=document.getElementById("chat-box");
+const msgs=document.getElementById("msgs");
+const input=document.getElementById("inp");
+const send=document.getElementById("send");
+const topInfo=document.getElementById("top-info");
+const logout=document.getElementById("logout");
+
+let UID=null,ROLE=null;
+
+// ============= AUTH LISTENER ==========================
+auth.onAuthStateChanged(async u=>{
+  if(!u){box.classList.add("hidden");topInfo.innerText="Tidak login";return;}
+  
+  UID=u.uid;
+  ROLE=(await (await import("./firebase.js")).db).role || "user";
+  topInfo.innerText="Login sebagai: "+ROLE;
+  box.classList.remove("hidden");
+
+  loadChat();
+});
+
+// ============ LOAD CHAT KHUSUS RUANG USER SAJA =========
+async function loadChat(){
+  let key = ROLE==="admin" ? await adminKey(UID) : await userKey(UID);
+
+  onValue(ref(db,"chats/"+UID+"/messages"),snap=>{
+    msgs.innerHTML="";
+    let list=snap.val()||{};
+    Object.keys(list).forEach(k=>{
+      let m=list[k];
+      if(m.exp < Date.now()) return; // auto skip expired
+      dec(key,m).then(txt=>{
+        let div=document.createElement("div");
+        div.className="p-2 rounded bubble fade";
+        div.innerHTML=`<b>${m.from}</b><br>${txt}`;
+        msgs.append(div);
+      });
+    });
+    msgs.scrollTop=msgs.scrollHeight;
+  });
+}
+
+// ============= SEND MESSAGE TO ADMIN ONLY! =============
+send.onclick=async()=>{
+  if(!input.value.trim())return;
+  let text=input.value.trim();
+  let key=ROLE==="admin"? await adminKey(UID) : await userKey(UID);
+  let e=await enc(key,text);
+  
+  let msgRef=push(ref(db,"chats/"+UID+"/messages"));
+  await set(msgRef,{
+    cipher:e.cipher,iv:e.iv,
+    from:ROLE,
+    ts:Date.now(),
+    exp:Date.now()+3600000 // 1 jam auto expired
+  });
+
+  input.value="";
+};
+
+// ==================== LOGOUT ===========================
+logout.onclick=()=>signOut(auth);
+</script>
+</body>
+</html>

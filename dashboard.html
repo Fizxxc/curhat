@@ -1,0 +1,331 @@
+<!doctype html>
+<html lang="id">
+
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Admin Dashboard — ChatLive</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.lordicon.com/ritcuqlt.js"></script>
+</head>
+
+<body class="bg-gray-100 min-h-screen text-gray-900">
+    <div class="max-w-5xl mx-auto p-4">
+        <header class="flex items-center justify-between mb-4">
+            <div class="flex items-center gap-3">
+                <lord-icon src="https://cdn.lordicon.com/zniqnylq.json" trigger="hover" style="width:40px;height:40px"></lord-icon>
+                <div>
+                    <h1 class="text-xl font-semibold">Dashboard Admin</h1>
+                    <p class="text-sm text-gray-500">ChatLive — kelola curhat & balas langsung</p>
+                </div>
+            </div>
+
+            <div class="flex items-center gap-4">
+                <label class="flex items-center gap-2 text-sm">
+                    <input id="ai-toggle" type="checkbox" class="h-4 w-4 rounded" />
+                    Aktifkan AI otomatis
+                </label>
+                <button id="btn-logout" class="px-3 py-2 bg-red-600 text-white rounded-md text-sm">Logout</button>
+            </div>
+        </header>
+
+        <main class="bg-white rounded-xl shadow overflow-hidden">
+            <div class="grid grid-cols-12">
+                <!-- Left: message list (main chat) -->
+                <section class="col-span-12 md:col-span-8 border-r border-gray-100 relative">
+                    <div class="h-[72vh] overflow-auto p-4" id="messages">
+                        <!-- Messages will render here as chat bubbles -->
+                    </div>
+
+                    <!-- Input area -->
+                    <form id="send-form" class="sticky bottom-0 bg-white border-t border-gray-100 p-3 flex items-center gap-3">
+                        <div id="reply-preview" class="flex-1 text-sm text-gray-600 hidden items-center gap-2">
+                            <span class="px-2 py-1 rounded bg-gray-100 text-xs" id="reply-to-label"></span>
+                            <button type="button" id="cancel-reply" class="text-xs text-gray-500">Batal</button>
+                        </div>
+
+                        <input id="msg-input" type="text" placeholder="Ketik balasan... (Enter untuk kirim)" class="flex-1 px-3 py-2 rounded-md border border-gray-200 focus:outline-none focus:ring-2 focus:ring-indigo-400" />
+                        <button id="send-btn" class="px-4 py-2 bg-indigo-600 text-white rounded-md">Kirim</button>
+                    </form>
+                </section>
+
+                <!-- Right: recent metadata / quick actions -->
+                <aside class="hidden md:block md:col-span-4 p-4">
+                    <div class="space-y-4">
+                        <div class="bg-indigo-50 p-3 rounded">
+                            <h3 class="text-sm font-medium text-indigo-800">Aktif</h3>
+                            <p class="text-xs text-indigo-700">Terapkan balasan cepat atau gunakan AI</p>
+                        </div>
+
+                        <div class="bg-gray-50 p-3 rounded">
+                            <h4 class="text-sm font-medium">Petunjuk</h4>
+                            <ul class="text-xs text-gray-600 mt-2 list-disc list-inside space-y-1">
+                                <li>Klik pesan untuk memilih reply target</li>
+                                <li>Gunakan toggle "AI" untuk menghasilkan balasan otomatis</li>
+                                <li>Pesan terenkripsi ditandai [Encrypted]</li>
+                                <li>Pilih user untuk memfilter percakapan / target balasan</li>
+                            </ul>
+                        </div>
+
+                        <div id="user-selector" class="bg-white p-3 rounded border">
+                            <div class="flex items-center justify-between mb-2">
+                                <h4 class="text-sm font-medium">Pilih User</h4>
+                                <button id="clear-filter" class="text-xs text-gray-500">Clear</button>
+                            </div>
+                            <div id="user-list" class="space-y-2 text-sm max-h-48 overflow-auto"></div>
+                        </div>
+
+                        <div id="stats" class="bg-white p-3 rounded border text-sm text-gray-600">
+                            <div>Pesan total: <span id="total-count">0</span></div>
+                            <div>Pesan tampil: <span id="active-count">0</span></div>
+                            <div>Target user: <span id="selected-user" class="font-medium">-</span></div>
+                        </div>
+                    </div>
+                </aside>
+            </div>
+        </main>
+    </div>
+
+    <script type="module">
+        import { db, auth, ref, push, onValue, set, signOut } from './firebase.js';
+
+        const messagesEl = document.getElementById('messages');
+        const btnLogout = document.getElementById('btn-logout');
+        const aiToggle = document.getElementById('ai-toggle');
+        const sendForm = document.getElementById('send-form');
+        const msgInput = document.getElementById('msg-input');
+        const sendBtn = document.getElementById('send-btn');
+        const replyPreview = document.getElementById('reply-preview');
+        const replyToLabel = document.getElementById('reply-to-label');
+        const cancelReply = document.getElementById('cancel-reply');
+        const totalCountEl = document.getElementById('total-count');
+        const activeCountEl = document.getElementById('active-count');
+
+        const userListEl = document.getElementById('user-list');
+        const clearFilterBtn = document.getElementById('clear-filter');
+        const selectedUserEl = document.getElementById('selected-user');
+
+        let currentUser = null;
+        let replyTo = null; // message object we are replying to
+        let selectedUser = null; // currently filtered/target user
+
+        auth.onAuthStateChanged(user => {
+            if (!user) { alert('Login dulu'); location.href = 'login-admin.html'; }
+            else currentUser = { uid: user.uid, displayName: 'Admin_' + Math.floor(Math.random() * 999) };
+        });
+
+        btnLogout.addEventListener('click', async () => { await signOut(auth); location.href = 'login-admin.html'; });
+
+        // Helper: format time
+        const fmtTime = ts => new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
+        // Utility: detect admin/ai (so we can list real users)
+        const isAdminOrAI = m => (m.role === 'admin') || (m.displayName && m.displayName.startsWith('Admin_')) || (m.role === 'ai') || (m.displayName && m.displayName.toLowerCase().includes('ai'));
+
+        // Render messages as chat bubbles; also build user list
+        onValue(ref(db, 'messages'), snap => {
+            const val = snap.val() || {};
+            const arr = Object.keys(val).map(k => ({ id: k, ...val[k] })).sort((a, b) => a.ts - b.ts);
+
+            // build user set (exclude admins/AIs)
+            const users = Array.from(new Set(arr
+                .map(m => m.displayName || 'Anon')
+                .filter(name => name && !name.toString().startsWith('Admin_') && name.toString().toLowerCase().indexOf('ai') === -1)
+            ));
+
+            // render user list
+            userListEl.innerHTML = '';
+            users.forEach(name => {
+                const btn = document.createElement('button');
+                btn.type = 'button';
+                btn.className = 'w-full text-left px-2 py-1 rounded hover:bg-indigo-50';
+                if (selectedUser === name) btn.classList.add('bg-indigo-600', 'text-white');
+                btn.textContent = name;
+                btn.onclick = () => {
+                    // toggle selection
+                    selectedUser = (selectedUser === name) ? null : name;
+                    selectedUserEl.textContent = selectedUser || '-';
+                    // re-render will happen because we rebuild UI below onValue
+                    // make sure replyTo is cleared when switching target user
+                    replyTo = null;
+                    replyPreview.classList.add('hidden');
+                };
+                userListEl.appendChild(btn);
+            });
+
+            clearFilterBtn.onclick = () => {
+                selectedUser = null;
+                selectedUserEl.textContent = '-';
+                replyTo = null;
+                replyPreview.classList.add('hidden');
+            };
+
+            // Filter messages to render: if selectedUser set, show messages from/to that user and admin messages
+            const displayed = arr.filter(m => {
+                if (!selectedUser) return true;
+                const name = m.displayName || 'Anon';
+                // show messages sent by the selected user OR messages targeting that user OR admin messages (so admin replies remain visible)
+                return name === selectedUser || (m.to && m.to === selectedUser) || isAdminOrAI(m);
+            });
+
+            messagesEl.innerHTML = '';
+            let total = arr.length, active = 0;
+            displayed.forEach(m => {
+                // skip expired
+                if (m.expiresAt && m.expiresAt < Date.now()) return;
+                active++;
+
+                // Determine alignment & style
+                const fromAdmin = m.role === 'admin' || (m.displayName && m.displayName.startsWith('Admin_'));
+                const isAI = m.role === 'ai' || (m.displayName && m.displayName.toLowerCase().includes('ai'));
+                const alignRight = fromAdmin;
+
+                const wrapper = document.createElement('div');
+                wrapper.className = 'mb-3 flex ' + (alignRight ? 'justify-end' : 'justify-start');
+
+                const bubble = document.createElement('div');
+                bubble.className = 'max-w-[78%] p-3 rounded-lg shadow-sm';
+                bubble.classList.add(alignRight ? 'bg-indigo-600 text-white rounded-br-none' : 'bg-gray-100 text-gray-900 rounded-bl-none');
+
+                // header (name + time + to-tag)
+                const header = document.createElement('div');
+                header.className = 'flex items-baseline justify-between gap-2 mb-1';
+                const leftHeader = document.createElement('div');
+                leftHeader.className = 'flex items-center gap-2';
+
+                const nameEl = document.createElement('div');
+                nameEl.className = 'text-xs font-semibold';
+                nameEl.textContent = m.displayName || 'Anon';
+                leftHeader.appendChild(nameEl);
+
+                if (m.to) {
+                    const toEl = document.createElement('div');
+                    toEl.className = 'text-[10px] bg-white/10 px-1 rounded text-[10px] ml-1';
+                    toEl.style.opacity = alignRight ? '0.9' : '1';
+                    toEl.textContent = `→ ${m.to}`;
+                    leftHeader.appendChild(toEl);
+                }
+
+                const timeEl = document.createElement('div');
+                timeEl.className = 'text-[10px] text-gray-300';
+                timeEl.textContent = fmtTime(m.ts);
+
+                header.appendChild(leftHeader);
+                header.appendChild(timeEl);
+
+                // content
+                const content = document.createElement('div');
+                content.className = 'text-sm leading-relaxed';
+                if (m.cipher) {
+                    content.textContent = '[Encrypted]';
+                } else if (m.text) {
+                    content.textContent = m.text;
+                } else {
+                    content.textContent = JSON.stringify(m).slice(0, 200);
+                }
+
+                // footer actions: reply hint
+                const footer = document.createElement('div');
+                footer.className = 'mt-2 flex items-center gap-2';
+                const btnReply = document.createElement('button');
+                btnReply.className = 'text-xs text-indigo-600 bg-indigo-50 px-2 py-1 rounded';
+                btnReply.textContent = 'Balas';
+                btnReply.onclick = () => {
+                    replyTo = m;
+                    // when replying, set selectedUser to the original sender so admin reply targets that user
+                    const targetName = m.displayName || 'Anon';
+                    selectedUser = targetName;
+                    selectedUserEl.textContent = selectedUser;
+                    replyToLabel.textContent = `Balas: ${targetName} · ${fmtTime(m.ts)}`;
+                    replyPreview.classList.remove('hidden');
+                };
+
+                footer.appendChild(btnReply);
+
+                if (isAI) {
+                    const aiTag = document.createElement('span');
+                    aiTag.className = 'ml-2 text-xs bg-yellow-100 text-yellow-800 px-2 py-0.5 rounded';
+                    aiTag.textContent = 'AI';
+                    footer.appendChild(aiTag);
+                }
+
+                bubble.appendChild(header);
+                bubble.appendChild(content);
+                bubble.appendChild(footer);
+                wrapper.appendChild(bubble);
+                messagesEl.appendChild(wrapper);
+            });
+
+            totalCountEl.textContent = total;
+            activeCountEl.textContent = active;
+
+            // scroll to bottom smoothly
+            messagesEl.scrollTo({ top: messagesEl.scrollHeight, behavior: 'smooth' });
+        });
+
+        // Cancel reply
+        cancelReply.addEventListener('click', () => {
+            replyTo = null;
+            replyPreview.classList.add('hidden');
+            replyToLabel.textContent = '';
+        });
+
+        // Send message (admin)
+        sendForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const txt = msgInput.value.trim();
+            if (!txt || !currentUser) return;
+            sendBtn.disabled = true;
+
+            // If AI toggle is ON, ask API to refine or generate reply
+            let finalText = txt;
+            if (aiToggle.checked) {
+                try {
+                    const res = await fetch('/api/openai-reply', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ message: txt, adminName: currentUser.displayName })
+                    });
+                    const data = await res.json();
+                    if (data.reply) finalText = data.reply;
+                } catch (err) {
+                    console.warn('AI reply failed, sending original text', err);
+                }
+            }
+
+            // Build message object and push to DB
+            const payload = {
+                text: finalText,
+                displayName: currentUser.displayName,
+                role: aiToggle.checked ? 'ai' : 'admin',
+                ts: Date.now(),
+                replyTo: replyTo ? replyTo.id : null,
+                // include target user (so other admins can see whom this message targets)
+                to: selectedUser || null,
+                expiresAt: Date.now() + 3600000
+            };
+
+            try {
+                await set(push(ref(db, 'messages')), payload);
+                msgInput.value = '';
+                replyTo = null;
+                replyPreview.classList.add('hidden');
+            } catch (err) {
+                console.error('Gagal kirim:', err);
+                alert('Gagal mengirim pesan');
+            } finally {
+                sendBtn.disabled = false;
+            }
+        });
+
+        // Send on Enter (without shift)
+        msgInput.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                sendForm.dispatchEvent(new Event('submit', { cancelable: true, bubbles: true }));
+            }
+        });
+    </script>
+</body>
+
+</html>

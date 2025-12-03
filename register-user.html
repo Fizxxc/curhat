@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Register User — Forum Curhat</title>
+<script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gradient-to-br from-indigo-50 to-white min-h-screen flex items-center justify-center">
+
+<div class="bg-white p-8 rounded-xl shadow-lg w-full max-w-md">
+  <h1 class="text-2xl font-semibold mb-6 text-center">Register User</h1>
+  <form id="register-form" class="flex flex-col gap-4">
+    <input type="email" id="email" placeholder="Email" required class="p-3 border rounded">
+    <input type="password" id="password" placeholder="Password" required class="p-3 border rounded">
+    <button type="submit" class="bg-indigo-600 text-white p-3 rounded font-semibold">Register</button>
+  </form>
+  <p class="mt-4 text-sm text-center text-gray-500">Sudah punya akun? <a href="login-user.html" class="text-indigo-600">Login</a></p>
+</div>
+
+<script type="module">
+import { auth, createUserWithEmailAndPassword, db, ref, set } from './firebase.js';
+
+const form=document.getElementById('register-form');
+
+form.addEventListener('submit', async(e)=>{
+  e.preventDefault();
+  const email=document.getElementById('email').value;
+  const password=document.getElementById('password').value;
+  try{
+    const userCred=await createUserWithEmailAndPassword(auth,email,password);
+    const uid=userCred.user.uid;
+    // Generate random username
+    const username='User_'+Math.floor(Math.random()*9000+1000);
+    await set(ref(db,'users/'+uid),{username,role:'user'});
+    alert('Register sukses! Username otomatis: '+username);
+    location.href='forum.html';
+  }catch(err){alert(err.message);}
+});
+</script>
+</body>
+</html>
